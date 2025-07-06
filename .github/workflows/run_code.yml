@@ -1,0 +1,97 @@
+name: Run User Code
+
+on:
+  workflow_dispatch:
+    inputs:
+      language:
+        description: 'Programming language (python, cpp, java)'
+        required: true
+        default: 'python'
+        type: string
+      filename:
+        description: 'Name of the code file (e.g. array.py, dp.cpp, Main.java)'
+        required: true
+        default: 'main.py'
+        type: string
+      os:
+        description: 'Operating system (ubuntu-latest, windows-latest, macos-latest)'
+        required: true
+        default: 'ubuntu-latest'
+        type: string
+
+jobs:
+  run:
+    runs-on: ${{ github.event.inputs.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      #############################
+      # ENVIRONMENT SETUP
+      #############################
+
+      - name: Setup Python
+        if: ${{ github.event.inputs.language == 'python' }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Setup Java
+        if: ${{ github.event.inputs.language == 'java' }}
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup g++ on Windows
+        if: ${{ github.event.inputs.language == 'cpp' && runner.os == 'Windows' }}
+        uses: egor-tensin/setup-mingw@v2
+        with:
+          version: 12.2.0
+
+      - name: Setup g++ on Linux/macOS
+        if: ${{ github.event.inputs.language == 'cpp' && (runner.os == 'Linux' || runner.os == 'macOS') }}
+        run: |
+          g++ --version || sudo apt update && sudo apt install -y g++
+
+      #############################
+      # CODE EXECUTION
+      #############################
+
+      - name: Run Python Code
+        if: ${{ github.event.inputs.language == 'python' }}
+        run: |
+          mkdir -p output/python
+          python code/python/${{ github.event.inputs.filename }} > output/python/${{ github.event.inputs.filename }}_output.txt 2>&1 || echo "Python execution failed" > output/python/${{ github.event.inputs.filename }}_output.txt
+
+      - name: Compile and Run C++ Code
+        if: ${{ github.event.inputs.language == 'cpp' }}
+        shell: bash
+        run: |
+          mkdir -p output/cpp
+          file="code/cpp/${{ github.event.inputs.filename }}"
+          outfile="output/cpp/${{ github.event.inputs.filename }}_output.txt"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            g++ "$file" -o main.exe && ./main.exe > "$outfile" 2>&1 || echo "C++ execution failed" > "$outfile"
+          else
+            g++ "$file" -o main && ./main > "$outfile" 2>&1 || echo "C++ execution failed" > "$outfile"
+          fi
+
+      - name: Compile and Run Java Code
+        if: ${{ github.event.inputs.language == 'java' }}
+        shell: bash
+        run: |
+          mkdir -p output/java
+          javac code/java/${{ github.event.inputs.filename }} && java -cp code/java Main > output/java/${{ github.event.inputs.filename }}_output.txt 2>&1 || echo "Java execution failed" > output/java/${{ github.event.inputs.filename }}_output.txt
+
+      #############################
+      # UPLOAD OUTPUT
+      #############################
+
+      - name: Upload Output Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: result
+          path: |
+            output/**/*.txt

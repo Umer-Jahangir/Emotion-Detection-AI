@@ -1,0 +1,41 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.log
+.env
+*.env
+*.DS_Store
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+*.pot
+*.pyc
+
+# React / Node
+node_modules/
+build/
+dist/
+.env.local
+.env.development
+.env.production
+
+# OS/system
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# VSCode / IDEs
+.vscode/
+.idea/
+
+# Git
+*.orig
+
+# GitHub Actions Artifacts
+output/
+*.zip
