@@ -86,12 +86,15 @@ jobs:
           javac code/java/${{ github.event.inputs.filename }} && java -cp code/java Main > output/java/${{ github.event.inputs.filename }}_output.txt 2>&1 || echo "Java execution failed" > output/java/${{ github.event.inputs.filename }}_output.txt
 
       #############################
-      # UPLOAD OUTPUT
+      # UPLOAD OUTPUT + zip
       #############################
+
+      - name: Upload Output Artifact
+        run: |
+            zip -r result-${{ github.event.inputs.filename }}.zip output
 
       - name: Upload Output Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: result
-          path: |
-            output/**/*.txt
+            name: result-${{ github.event.inputs.filename }}
+            path: result-${{ github.event.inputs.filename }}.zip
