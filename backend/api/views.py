@@ -1,100 +1,97 @@
-from rest_framework.decorators import api_view
+import cv2
+import numpy as np
+import tempfile
+from collections import Counter
+from rest_framework.views import APIView
 from rest_framework.response import Response
-import uuid, os, base64, requests
-from dotenv import load_dotenv
+from rest_framework.parsers import MultiPartParser
+from deepface import DeepFace
+from PIL import Image
 
-load_dotenv()
+class EmotionAnalyze(APIView):
+    """
+    Handles:
+    - Image upload
+    - Video file upload
+    - Webcam frames (sent as image)
+    """
+    parser_classes = [MultiPartParser]
 
-@api_view(['POST'])
-def submit_code(request):
-    code = request.data.get("code")
-    language = request.data.get("language")
-    os_choice = request.data.get("os")
+    def post(self, request):
+        image_file = request.FILES.get("image")
+        video_file = request.FILES.get("video")
 
-    run_id = str(uuid.uuid4())
-    ext_map = {"python": "py", "cpp": "cpp", "java": "java"}
-    file_ext = ext_map[language]
-    filename = f"{run_id}.{file_ext}"  # unique filename
+        if image_file:
+            return self.analyze_image(image_file)
+        elif video_file:
+            return self.analyze_video(video_file)
+        else:
+            return Response({"error": "No media provided"}, status=400)
 
-    # Save file locally
-    local_dir = f"/tmp/{run_id}/code"
-    os.makedirs(local_dir, exist_ok=True)
-    local_path = os.path.join(local_dir, filename)
+    def analyze_image(self, image_file):
+        try:
+            img = Image.open(image_file).convert("RGB")
+            img_np = np.array(img)
 
-    with open(local_path, "w") as f:
-        f.write(code)
+            # DeepFace analysis
+            result = DeepFace.analyze(img_np, actions=["emotion"], enforce_detection=False)[0]
 
-    # Load GitHub credentials
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-    GITHUB_REPO = os.getenv("GITHUB_REPO")
-    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+            # Format response
+            response = {
+                "dominant_emotion": result["dominant_emotion"],
+                "scores": result["emotion"]  # {happy: 0.7, sad: 0.1, ...}
+            }
+            return Response(response)
 
-    # Push file to GitHub under: code/python/filename
-    github_path = f"code/{language}/{filename}"
-    commit_message = f"Add {filename} via Runner H"
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
 
-    with open(local_path, "rb") as f:
-        encoded_content = base64.b64encode(f.read()).decode()
+    def analyze_video(self, video_file):
+        try:
+            # Save video temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                for chunk in video_file.chunks():
+                    tmp.write(chunk)
+                video_path = tmp.name
 
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return Response({"error": "Unable to open video"}, status=500)
 
-    github_api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{github_path}"
+            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 1
+            frame_count = 0
+            emotions_list = []
 
-    # Optional: Check if file exists to update SHA
-    sha = None
-    check = requests.get(github_api_url, headers=headers)
-    if check.status_code == 200:
-        sha = check.json().get("sha")
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-    payload = {
-        "message": commit_message,
-        "content": encoded_content,
-        "branch": GITHUB_BRANCH
-    }
-    if sha:
-        payload["sha"] = sha
+                # Sample 1 frame per second
+                if frame_count % fps == 0:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    try:
+                        result = DeepFace.analyze(rgb_frame, actions=["emotion"], enforce_detection=False)[0]
+                        emotions_list.append(result["dominant_emotion"])
+                    except:
+                        pass  # skip frames with no face
 
-    # Push file to GitHub
-    response = requests.put(github_api_url, headers=headers, json=payload)
+                frame_count += 1
 
-    if response.status_code not in [200, 201]:
-        return Response({
-            "error": "GitHub push failed",
-            "details": response.json()
-        }, status=500)
+            cap.release()
 
-    # Trigger Runner H (GitHub Actions workflow_dispatch)
-    workflow_dispatch_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/run_code.yml/dispatches"
+            if not emotions_list:
+                return Response({"error": "No faces detected in video"}, status=400)
 
-    workflow_payload = {
-        "ref": GITHUB_BRANCH,
-        "inputs": {
-            "language": language,
-            "os": os_choice,
-            "filename": filename
-        }
-    }
+            # Aggregate emotions
+            summary = Counter(emotions_list)
+            dominant = summary.most_common(1)[0][0]
 
-    dispatch_headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json"
-    }
+            return Response({
+                "dominant_emotion": dominant,
+                "timeline": summary,  # e.g., {"Happy": 10, "Neutral": 3, "Sad": 2}
+                "total_frames": len(emotions_list)
+            })
 
-    workflow_response = requests.post(workflow_dispatch_url, headers=dispatch_headers, json=workflow_payload)
-
-    if workflow_response.status_code != 204:
-        return Response({
-            "error": "Failed to trigger Runner H GitHub Actions",
-            "details": workflow_response.json()
-        }, status=500)
-
-    return Response({
-        "run_id": run_id,
-        "filename": filename,
-        "language": language,
-        "os": os_choice,
-        "message": " Code pushed and Runner H workflow triggered!"
-    })
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
